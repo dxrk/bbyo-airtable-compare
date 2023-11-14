@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Summer Moves Management</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+
+      #output {
+        margin-top: 20px;
+      }
+
+      #airTableOutput {
+        margin-top: 20px;
+      }
+
+      #progressBarContainer {
+        width: 50%; /* Adjust the width of the container */
+        background-color: #f0f0f0;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 10px;
+        display: none; /* Hidden initially */
+      }
+
+      #progressBar {
+        height: 20px;
+        width: 0; /* Adjust the initial width of the progress bar */
+        background-color: #4caf50; /* Green color for progress */
+        transition: width 0.3s ease;
+      }
+
+      #airTableProgressBarContainer {
+        width: 50%; /* Adjust the width of the container */
+        background-color: #f0f0f0;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 10px;
+        display: none; /* Hidden initially */
+      }
+
+      #airTableProgressBar {
+        height: 20px;
+        width: 0; /* Adjust the initial width of the progress bar */
+        background-color: #4caf50; /* Green color for progress */
+        transition: width 0.3s ease;
+      }
+
+      #pushToAirtableButton {
+        margin-top: 10px;
+        padding: 10px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        display: none; /* Hidden initially */
+      }
+
+      #clear {
+        margin-top: 10px;
+        padding: 10px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      #action {
+        margin-top: 10px;
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Summer Moves Management Comparison Utility</h1>
+    <h3>
+      Make sure to import parents first, for both creating and updating records.
+    </h3>
+    <input type="file" id="csvFileInput" accept=".csv" />
+    <br />
+    <label for="action">Choose an action:</label>
+    <select id="action">
+      <option value="update">Update Existing Records</option>
+      <option value="create">Create New Records</option>
+    </select>
+    <br />
+    <button onclick="processCSV()">Process CSV</button>
+    <button onclick="clearRecords()">Clear Records</button>
+
+    <div id="output"></div>
+
+    <!-- Add a progress bar to your HTML -->
+    <div id="progressBarContainer">
+      <div id="progressBar"></div>
+    </div>
+
+    <!-- Add a button to push changes to Airtable -->
+    <button id="pushToAirtableButton" onclick="pushToAirtable()">
+      Push Changes
+    </button>
+
+    <div id="airTableOutput"></div>
+
+    <div id="airTableProgressBarContainer">
+      <div id="airTableProgressBar"></div>
+    </div>
+
+    <script>
+      // Modify your processCSV function
+      async function processCSV() {
+        const csvFileInput = document.getElementById("csvFileInput");
+        const action = document.getElementById("action").value;
+        const outputDiv = document.getElementById("output");
+        const airTableOutputDiv = document.getElementById("airTableOutput");
+        const progressBar = document.getElementById("progressBar");
+        const airTableProgressBar = document.getElementById(
+          "airTableProgressBar"
+        );
+        const pushToAirtableButton = document.getElementById(
+          "pushToAirtableButton"
+        );
+
+        if (!csvFileInput.files.length) {
+          alert("Please choose a CSV file.");
+          return;
+        }
+
+        const csvFile = csvFileInput.files[0];
+
+        // Reset progress bar
+        progressBar.style.width = "0%";
+
+        try {
+          // Display initial message
+          outputDiv.innerHTML = `<p>Starting process, loading records (Might take a minute).</p>`;
+          progressBar.parentElement.style.display = "block";
+
+          const formData = new FormData();
+          formData.append("csvFile", csvFile);
+          formData.append("action", action);
+
+          const response = await fetch("/process-csv", {
+            method: "POST",
+            body: formData,
+          });
+
+          const result = await response.json();
+
+          outputDiv.innerHTML += `\n<p>All ${result.totalRecords} records have been loaded.</p>`;
+          pushToAirtableButton.innerHTML = `Push ${result.records.length} Changes to Airtable`;
+          pushToAirtableButton.style.display = "block";
+
+          progressBar.style.width = "100%";
+        } catch (error) {
+          console.error("Error:", error);
+          outputDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+        }
+      }
+
+      async function pushToAirtable() {
+        const outputDiv = document.getElementById("output");
+        const airTableOutputDiv = document.getElementById("airTableOutput");
+        const progressBar = document.getElementById("progressBar");
+        const airTableProgressBar = document.getElementById(
+          "airTableProgressBar"
+        );
+        const pushToAirtableButton = document.getElementById(
+          "pushToAirtableButton"
+        );
+
+        // Reset progress bar
+        airTableProgressBar.style.width = "0%";
+
+        try {
+          // Display initial message
+          airTableOutputDiv.innerHTML = `<p>Starting process, pushing records to Airtable (Might take a minute).</p>`;
+          airTableProgressBar.parentElement.style.display = "block";
+
+          const response = await fetch("/update-airtable", {
+            method: "POST",
+          });
+
+          const result = await response.json();
+
+          airTableOutputDiv.innerHTML += `\n<p>All records have been updated/pushed to Airtable.</p>`;
+
+          airTableProgressBar.style.width = "100%";
+        } catch (error) {
+          console.error("Error:", error);
+          airTableOutputDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+        }
+      }
+
+      // Add function to clear
+      async function clearRecords() {
+        const outputDiv = document.getElementById("output");
+        const airTableOutputDiv = document.getElementById("airTableOutput");
+        const progressBar = document.getElementById("progressBar");
+        const airTableProgressBar = document.getElementById(
+          "airTableProgressBar"
+        );
+        const pushToAirtableButton = document.getElementById(
+          "pushToAirtableButton"
+        );
+
+        // Reset progress bar
+        progressBar.style.width = "0%";
+        airTableProgressBar.style.width = "0%";
+
+        try {
+          const response = await fetch("/clear-storage", {
+            method: "POST",
+          });
+
+          const result = await response.json();
+
+          outputDiv.innerHTML = `<p>${result.message}</p>`;
+          airTableOutputDiv.innerHTML = "";
+
+          // hide the divs that were originally blocked
+          progressBar.parentElement.style.display = "none";
+          airTableProgressBar.parentElement.style.display = "none";
+          pushToAirtableButton.style.display = "none";
+        } catch (error) {
+          console.error("Error:", error);
+          outputDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+        }
+      }
+    </script>
+  </body>
+</html>
