@@ -1,6 +1,5 @@
 /* TODO: Add to bxntal.com/utils/
-   - Push changes from HTML instead of in express server, so progress bar will update
-   - figure out why parents are still not working correctly */
+   - Need to check how to pass NULL to airtable */
 
 const express = require("express");
 const http = require("http");
@@ -12,7 +11,6 @@ const storageFile = require("./storage.json");
 
 const Airtable = require("airtable");
 const { send } = require("process");
-const { match } = require("assert");
 Airtable.configure({
   endpointUrl: "https://api.airtable.com",
   apiKey: storageFile.apiKey,
@@ -40,14 +38,26 @@ app.post("/process-csv", upload.single("csvFile"), async (req, res) => {
     const csvBuffer = req.file.buffer;
     const csvRecords = await parseCSVBuffer(csvBuffer);
 
-    const airtableChanges = await findChangedRecords(csvRecords);
-    res.json({
-      message: "Airtable processed successfully",
-      updatedRecords: airtableChanges.updated,
-      newRecords: airtableChanges.new,
-      totalRecords: storageFile.lastTotal,
-      totalChanges: storageFile.totalChanges,
-    });
+    // Check the action from the request
+    const action = req.body.action;
+
+    if (action === "update") {
+      const updatedRecords = await findUpdatedRecords(csvRecords);
+      res.json({
+        message: "CSV processed successfully",
+        records: updatedRecords,
+        totalRecords: storageFile.lastTotal,
+      });
+    } else if (action === "create") {
+      const newRecords = await findNewRecords(csvRecords);
+      res.json({
+        message: "CSV processed successfully",
+        records: newRecords,
+        totalRecords: storageFile.lastTotal,
+      });
+    } else {
+      res.status(400).json({ message: "Invalid action" });
+    }
   } catch (error) {
     console.error("Error:", error);
     res.status(500).json({ message: "Internal Server Error", error: error });
@@ -57,21 +67,39 @@ app.post("/process-csv", upload.single("csvFile"), async (req, res) => {
 // Endpoint to update airtable
 app.post("/update-airtable", async (req, res) => {
   try {
-    const records = req.body.records;
+    const updatedRecords = storageFile.updatedRecords;
+    const newRecords = storageFile.newRecords;
 
-    if (req.body.updated) {
-      await table.update(records);
+    if (updatedRecords.length > 0) {
+      for (let i = 0; i < updatedRecords.length; i += 10) {
+        await table.update(updatedRecords.slice(i, i + 10));
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+
+      res.json({
+        message: `Airtable updated successfully for ${updatedRecords.length} records`,
+        updatedRecords,
+        totalRecords: storageFile.lastTotal,
+      });
+    } else if (newRecords.length > 0) {
+      for (let i = 0; i < newRecords.length; i += 10) {
+        await table.create(newRecords.slice(i, i + 10));
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+
+      res.json({
+        message: `Airtable updated successfully for ${newRecords.length} records`,
+        newRecords,
+        totalRecords: storageFile.lastTotal,
+      });
+    } else {
+      res.status(400).json({ message: "No records to update" });
     }
 
-    if (req.body.new) {
-      await table.create(records);
-    }
-
-    res.json({
-      message: `Airtable updated successfully for ${records.length} records`,
-      records,
-      totalRecords: storageFile.lastTotal,
-    });
+    // Clear storage file
+    storageFile.updatedRecords = [];
+    storageFile.newRecords = [];
+    fs.writeFileSync("./storage.json", JSON.stringify(storageFile));
   } catch (error) {
     console.error("Error:", error);
     res.status(500).json({ message: "Internal Server Error", error: error });
@@ -83,7 +111,6 @@ app.post("/clear-storage", (req, res) => {
   try {
     storageFile.updatedRecords = [];
     storageFile.newRecords = [];
-    storageFile.totalChanges = 0;
     fs.writeFileSync("./storage.json", JSON.stringify(storageFile));
 
     res.json({ message: "Storage cleared successfully!" });
@@ -109,12 +136,11 @@ function parseCSVBuffer(buffer) {
 }
 
 // Function to compare and generate updates
-async function findChangedRecords(csvRecords, res) {
+async function findUpdatedRecords(csvRecords, res) {
   try {
+    // const airtableRecords = await table.select().firstPage();
     const airtableRecords = await table.select().all();
-
     const updatedRecords = [];
-    const newRecords = [];
 
     csvRecords.forEach((csvRecord) => {
       const matchingAirtableRecord = airtableRecords.find(
@@ -153,7 +179,9 @@ async function findChangedRecords(csvRecords, res) {
           ],
           ["Summer Experience History", "Summer Experience History", false],
           ["Parent 1 MyBBYO ID", "Parent 1 MyBBYO ID", false],
+          ["Parent 1 Name", "Parent 1 Name", false],
           ["Parent 2 MyBBYO ID", "Parent 2 MyBBYO ID", false],
+          ["Parent 2 Name", "Parent 2 Name", false],
           ["Do Not Email", "Do Not Email", false],
           ["Do Not Call", "Do Not Call", false],
           ["Do Not Text", "Do Not Text", false],
@@ -190,6 +218,8 @@ async function findChangedRecords(csvRecords, res) {
                 "IC Events Attended",
                 "Regional Conventions Attended",
                 "IC/Summer Registration Launch Night",
+                "Parent 1 MyBBYO ID",
+                "Parent 2 MyBBYO ID",
               ];
 
               if (listOfInts.includes(field[0])) {
@@ -202,22 +232,6 @@ async function findChangedRecords(csvRecords, res) {
                   csvRecord[field[0]] == ""
                     ? []
                     : csvRecord[field[0]].split(",");
-              } else if (
-                field[0] == "Parent 1 MyBBYO ID" ||
-                field[0] == "Parent 2 MyBBYO ID"
-              ) {
-                if (
-                  parseInt(csvRecord[field[0]]) !=
-                    parseInt(
-                      matchingAirtableRecord.get("Parent 1 MyBBYO ID")
-                    ) &&
-                  parseInt(csvRecord[field[0]]) !=
-                    parseInt(matchingAirtableRecord.get("Parent 2 MyBBYO ID"))
-                ) {
-                  updatedRecord.fields[field[1]] = parseInt(
-                    csvRecord[field[0]]
-                  );
-                }
               } else {
                 updatedRecord.fields[field[1]] =
                   csvRecord[field[0]] == "" ? [] : csvRecord[field[0]];
@@ -232,16 +246,44 @@ async function findChangedRecords(csvRecords, res) {
                 updatedRecord.fields[key] === undefined ||
                 updatedRecord.fields[key].length === 0 ||
                 updatedRecord.fields[key] === null ||
-                isNaN(updatedRecord.fields[key])) &&
+                updatedRecord.fields[key] === NaN) &&
               delete updatedRecord.fields[key]
           );
 
           if (Object.keys(updatedRecord.fields).length !== 0) {
-            updatedRecord.fields["Updated?"] = getCurrentDateFormatted();
+            updatedRecord.fields["Updated?"] = "Yes";
             updatedRecords.push(updatedRecord);
+          } else {
           }
         }
-      } else {
+      }
+    });
+
+    storageFile.updatedRecords = updatedRecords;
+
+    console.log(airtableRecords.length);
+    storageFile.lastTotal = airtableRecords.length;
+    fs.writeFileSync("./storage.json", JSON.stringify(storageFile));
+
+    return updatedRecords;
+  } catch (error) {
+    console.error("Error:", error);
+  }
+}
+
+async function findNewRecords(csvRecords) {
+  try {
+    // Need to update this after the update function is done with the progress bar.
+    const airtableRecords = await table.select().all();
+    const newRecords = [];
+
+    csvRecords.forEach((csvRecord) => {
+      const matchingAirtableRecord = airtableRecords.find(
+        (airtableRecord) =>
+          airtableRecord.get("myBBYO ID") === csvRecord["myBBYO ID"]
+      );
+
+      if (!matchingAirtableRecord) {
         const newRecord = {
           fields: {
             "myBBYO ID": csvRecord["myBBYO ID"],
@@ -258,8 +300,8 @@ async function findChangedRecords(csvRecords, res) {
             "IC/Summer Registration Launch Night": parseInt(
               csvRecord["IC/Summer Registration Launch Night"]
             ),
-            "First Name": csvRecord[Object.keys(csvRecord)[0]],
-            "Last Name": csvRecord["Last Name"],
+            "First Name": csvRecord["First Name"],
+            "Last Name": csvRecord[Object.keys(csvRecord)[0]],
             "Graduation Year": csvRecord["Graduation Year"],
             "Address Line 1": csvRecord["Address Line 1"],
             City: csvRecord["City"],
@@ -294,38 +336,21 @@ async function findChangedRecords(csvRecords, res) {
               newRecord.fields[key] === NaN) &&
             delete newRecord.fields[key]
         );
-        newRecord.fields["Updated?"] = getCurrentDateFormatted();
+
+        newRecord.fields["Updated?"] = "Yes";
         newRecords.push(newRecord);
       }
     });
 
-    storageFile.updatedRecords = updatedRecords;
+    // Update storage with new records
     storageFile.newRecords = newRecords;
     storageFile.lastTotal = airtableRecords.length;
-    storageFile.totalChanges = updatedRecords.length + newRecords.length;
     fs.writeFileSync("./storage.json", JSON.stringify(storageFile));
 
-    return { updated: updatedRecords, new: newRecords };
+    return newRecords;
   } catch (error) {
     console.error("Error:", error);
   }
-}
-
-function getCurrentDateFormatted() {
-  const options = {
-    month: "numeric",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    hour12: true,
-    timeZoneName: "short",
-  };
-
-  const date = new Date();
-  const formattedDate = date.toLocaleString("en-US", options);
-
-  return `${formattedDate}`;
 }
 
 app.listen(port, () => {

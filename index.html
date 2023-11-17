@@ -70,11 +70,6 @@
         border-radius: 4px;
         cursor: pointer;
       }
-
-      #action {
-        margin-top: 10px;
-        margin-bottom: 10px;
-      }
     </style>
   </head>
   <body>
@@ -84,11 +79,6 @@
     </h3>
     <input type="file" id="csvFileInput" accept=".csv" />
     <br />
-    <label for="action">Choose an action:</label>
-    <select id="action">
-      <option value="update">Update Existing Records</option>
-      <option value="create">Create New Records</option>
-    </select>
     <br />
     <button onclick="processCSV()">Process CSV</button>
     <button onclick="clearRecords()">Clear Records</button>
@@ -112,10 +102,27 @@
     </div>
 
     <script>
+      // Check if there are records in localStorage
+      const records = JSON.parse(localStorage.getItem("records"));
+      if (records) {
+        const outputDiv = document.getElementById("output");
+        const pushToAirtableButton = document.getElementById(
+          "pushToAirtableButton"
+        );
+        outputDiv.innerHTML = `<p>There are ${
+          records.updatedRecords.length + records.newRecords.length
+        } records in local storage, from your last visit. <b>Updated Records:</b> ${
+          records.updatedRecords.length
+        }, <b>New Records:</b> ${records.newRecords.length}</p>`;
+        pushToAirtableButton.innerHTML = `Push ${
+          records.updatedRecords.length + records.newRecords.length
+        } Changes to Airtable`;
+        pushToAirtableButton.style.display = "block";
+      }
+
       // Modify your processCSV function
       async function processCSV() {
         const csvFileInput = document.getElementById("csvFileInput");
-        const action = document.getElementById("action").value;
         const outputDiv = document.getElementById("output");
         const airTableOutputDiv = document.getElementById("airTableOutput");
         const progressBar = document.getElementById("progressBar");
@@ -143,7 +150,6 @@
 
           const formData = new FormData();
           formData.append("csvFile", csvFile);
-          formData.append("action", action);
 
           const response = await fetch("/process-csv", {
             method: "POST",
@@ -152,10 +158,17 @@
 
           const result = await response.json();
 
-          outputDiv.innerHTML += `\n<p>All ${result.totalRecords} records have been loaded.</p>`;
-          pushToAirtableButton.innerHTML = `Push ${result.records.length} Changes to Airtable`;
+          outputDiv.innerHTML += `\n<p>Airtable has been processed! <b>Updated Records:</b> ${result.updatedRecords.length}, <b>New Records:</b> ${result.newRecords.length}</p>`;
+          pushToAirtableButton.innerHTML = `Push ${result.totalChanges} Changes to Airtable`;
           pushToAirtableButton.style.display = "block";
 
+          localStorage.setItem(
+            "records",
+            JSON.stringify({
+              newRecords: result.newRecords,
+              updatedRecords: result.updatedRecords,
+            })
+          );
           progressBar.style.width = "100%";
         } catch (error) {
           console.error("Error:", error);
@@ -182,15 +195,86 @@
           airTableOutputDiv.innerHTML = `<p>Starting process, pushing records to Airtable (Might take a minute).</p>`;
           airTableProgressBar.parentElement.style.display = "block";
 
-          const response = await fetch("/update-airtable", {
-            method: "POST",
-          });
+          // Use localStorage to get records
+          const records = JSON.parse(localStorage.getItem("records"));
+          const updatedRecords = records.updatedRecords;
+          const newRecords = records.newRecords;
+          const totalRecords = updatedRecords.length + newRecords.length;
+          let totalUpdated = 0;
 
-          const result = await response.json();
+          // For every 10 records, send to /update-airtable. Needs to happen twice, unless end of updatedRecords and unless end of newRecords.
+          if (updatedRecords.length > 0) {
+            for (let i = 0; i < updatedRecords.length; i += 10) {
+              const recordsToSend = updatedRecords.slice(i, i + 10);
+
+              const body = {
+                records: recordsToSend,
+                updated: true,
+              };
+
+              const response = await fetch("/update-airtable", {
+                method: "POST",
+                body: JSON.stringify(body),
+                headers: {
+                  "Content-Type": "application/json",
+                },
+              });
+              const result = await response.json();
+
+              totalUpdated += recordsToSend.length;
+
+              // Update progress bar
+              airTableProgressBar.style.width = `${Math.floor(
+                (totalUpdated / totalRecords) * 100
+              )}%`;
+
+              await new Promise((resolve) => setTimeout(resolve, 300));
+            }
+
+            airTableOutputDiv.innerHTML += `\n<p>Updated records have been updated/pushed to Airtable.</p>`;
+          }
+
+          if (newRecords.length > 0) {
+            for (let i = 0; i < newRecords.length; i += 10) {
+              const recordsToSend = newRecords.slice(i, i + 10);
+
+              const body = {
+                records: recordsToSend,
+                new: true,
+              };
+
+              const response = await fetch("/update-airtable", {
+                method: "POST",
+                body: JSON.stringify(body),
+                headers: {
+                  "Content-Type": "application/json",
+                },
+              });
+              const result = await response.json();
+
+              totalUpdated += recordsToSend.length;
+
+              // Update progress bar
+              airTableProgressBar.style.width = `${Math.floor(
+                (totalUpdated / totalRecords) * 100
+              )}%`;
+
+              await new Promise((resolve) => setTimeout(resolve, 300));
+            }
+
+            airTableOutputDiv.innerHTML += `\n<p>New records have been updated/pushed to Airtable.</p>`;
+          }
 
           airTableOutputDiv.innerHTML += `\n<p>All records have been updated/pushed to Airtable.</p>`;
 
           airTableProgressBar.style.width = "100%";
+
+          // clear localStorage
+          localStorage.clear();
+
+          const response = await fetch("/clear-storage", {
+            method: "POST",
+          });
         } catch (error) {
           console.error("Error:", error);
           airTableOutputDiv.innerHTML = `<p>Error: ${error.message}</p>`;
@@ -227,6 +311,9 @@
           progressBar.parentElement.style.display = "none";
           airTableProgressBar.parentElement.style.display = "none";
           pushToAirtableButton.style.display = "none";
+
+          // clear localStorage
+          localStorage.clear();
         } catch (error) {
           console.error("Error:", error);
           outputDiv.innerHTML = `<p>Error: ${error.message}</p>`;
